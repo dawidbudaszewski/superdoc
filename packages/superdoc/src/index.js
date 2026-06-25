@@ -33,6 +33,9 @@ import {
   AIWriter,
   ContextMenu,
   SlashMenu,
+  // Structural (block-level) tracked changes
+  StructuralTrackChanges,
+  computeStructuralDiff,
 } from '@superdoc/super-editor';
 import { DOCX, PDF, HTML, getFileObject, compareVersions } from '@superdoc/common';
 // @ts-expect-error Vite resolves DOCX asset URL imports; plain tsc does not.
@@ -298,4 +301,8 @@ export {
   AIWriter,
   ContextMenu,
   SlashMenu,
+
+  // Structural (block-level) tracked changes
+  StructuralTrackChanges,
+  computeStructuralDiff,
 };
