@@ -1,5 +1,5 @@
 {
-  "name": "superdoc",
+  "name": "@scale/superdoc",
   "type": "module",
   "version": "1.43.1",
   "license": "AGPL-3.0",
