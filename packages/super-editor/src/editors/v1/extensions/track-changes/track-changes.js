@@ -822,7 +822,25 @@ const dispatchCompiledInsertTrackedChange = ({
   if (trackChangesStorage) {
     trackChangesStorage.lastCompilerFailure = null;
   }
-  const activeMarks = state.storedMarks ?? state.doc.resolve(from).marks();
+  let activeMarks = state.storedMarks ?? state.doc.resolve(from).marks();
+  // For a tracked replace, `from` is the paragraph content boundary, which often
+  // resolves to an empty leading "paragraph mark" run whose textStyle is a null
+  // reset (fontSize:null, color:null, ...). Using those marks makes the
+  // replacement text render at the editor default instead of the paragraph's real
+  // run styling. Prefer the marks of the first non-empty text node in the
+  // replaced range. (Only when the caller hasn't explicitly set storedMarks.)
+  if (!state.storedMarks && from !== to) {
+    let rangeMarks = null;
+    state.doc.nodesBetween(from, to, (node) => {
+      if (rangeMarks) return false;
+      if (node.isText && node.text && node.text.trim().length > 0) {
+        rangeMarks = node.marks;
+        return false;
+      }
+      return true;
+    });
+    if (rangeMarks) activeMarks = rangeMarks;
+  }
   let intent;
   try {
     if (from === to && text) {
