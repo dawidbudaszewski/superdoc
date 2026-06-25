@@ -49,7 +49,7 @@ const readReplacementsMode = (editor) =>
  * Runs the atomic decision engine, dispatches the resulting transaction, and
  * emits bubble lifecycle events from the decision receipt.
  */
-const dispatchReviewDecision = ({ editor, state, dispatch, decision, target }) => {
+const dispatchReviewDecision = ({ editor, state, dispatch, decision, target, appendToTr }) => {
   const trackChangesStorage = getTrackChangesStorage(editor);
   if (trackChangesStorage) {
     trackChangesStorage.lastDecisionFailure = null;
@@ -79,6 +79,20 @@ const dispatchReviewDecision = ({ editor, state, dispatch, decision, target }) =
     trackChangesStorage.lastDecisionReceipt = result.receipt ?? null;
   }
   if (dispatch) {
+    // Let the caller append extra steps (e.g. block-level row/paragraph
+    // tracked-change resolution) onto the SAME transaction so inline and block
+    // changes are resolved atomically in a single dispatch. Block resolution
+    // maps its positions through tr.mapping, so it stays correct after the
+    // inline steps already in result.tr. Without this, resolving blocks in a
+    // second transaction races the inline dispatch and one of them is dropped
+    // as a mismatched transaction (the "accept-all needs two clicks" bug).
+    if (typeof appendToTr === 'function') {
+      try {
+        appendToTr(result.tr, state);
+      } catch {
+        // non-fatal: fall back to inline-only resolution
+      }
+    }
     // Compute the post-dispatch state locally so we can derive update events
     // for partial decisions (where a change has remaining tracked text on the
     // doc). Then dispatch the real transaction.
@@ -375,22 +389,40 @@ export const TrackChanges = Extension.create({
 
       acceptAllTrackedChanges:
         () =>
-        ({ state, dispatch, editor, commands }) => {
+        ({ state, dispatch, editor }) => {
+          // Block-level (row/paragraph) tracked changes live on node attrs, not
+          // inline marks, so they're resolved by applyRowTrackedChangeResolution
+          // rather than the inline decision engine. We resolve BOTH kinds in one
+          // atomic transaction so accept-all takes a single click regardless of
+          // the inline/block mix.
+          const blockIds = getBlockTrackedChanges(state).map((e) => e.id);
           const reviewDecision = dispatchReviewDecision({
             editor,
             state,
             dispatch,
             decision: 'accept',
             target: { kind: 'all' },
+            // Appended onto the inline transaction (atomic). Only runs when the
+            // inline decision actually dispatched (i.e. inline changes existed).
+            appendToTr: blockIds.length
+              ? (tr, s) => applyRowTrackedChangeResolution({ tr, state: s, ids: blockIds, decision: 'accept' })
+              : undefined,
           });
-          // Block-level row tracked changes live on node attrs, not inline
-          // marks, so dispatchReviewDecision can't touch them. Resolve them
-          // alongside so a single accept-all surface handles both kinds.
-          const blockEntries = getBlockTrackedChanges(state);
-          if (blockEntries.length > 0 && commands.acceptAllStructuralChanges) {
-            commands.acceptAllStructuralChanges();
+          // No inline changes (decision was a no-op, so nothing dispatched and
+          // the appendToTr hook never ran) but block changes remain: resolve
+          // them in their own transaction from the (still-current) state.
+          if (dispatch && !reviewDecision.applied && blockIds.length) {
+            const blockTr = state.tr;
+            blockTr.setMeta('inputType', 'acceptReject');
+            const { applied } = applyRowTrackedChangeResolution({
+              tr: blockTr,
+              state,
+              ids: blockIds,
+              decision: 'accept',
+            });
+            if (applied > 0) dispatch(blockTr);
           }
-          return reviewDecision.applied;
+          return reviewDecision.applied || blockIds.length > 0;
         },
 
       rejectTrackedChangeById:
@@ -478,21 +510,33 @@ export const TrackChanges = Extension.create({
 
       rejectAllTrackedChanges:
         () =>
-        ({ state, dispatch, editor, commands }) => {
+        ({ state, dispatch, editor }) => {
+          // Mirror acceptAllTrackedChanges: resolve inline + block changes in a
+          // single atomic transaction (one click), with a fallback for the
+          // block-only case.
+          const blockIds = getBlockTrackedChanges(state).map((e) => e.id);
           const reviewDecision = dispatchReviewDecision({
             editor,
             state,
             dispatch,
             decision: 'reject',
             target: { kind: 'all' },
+            appendToTr: blockIds.length
+              ? (tr, s) => applyRowTrackedChangeResolution({ tr, state: s, ids: blockIds, decision: 'reject' })
+              : undefined,
           });
-          // Mirror acceptAllTrackedChanges — block-level row tracked changes
-          // live on node attrs and need their own resolver.
-          const blockEntries = getBlockTrackedChanges(state);
-          if (blockEntries.length > 0 && commands.rejectAllStructuralChanges) {
-            commands.rejectAllStructuralChanges();
+          if (dispatch && !reviewDecision.applied && blockIds.length) {
+            const blockTr = state.tr;
+            blockTr.setMeta('inputType', 'acceptReject');
+            const { applied } = applyRowTrackedChangeResolution({
+              tr: blockTr,
+              state,
+              ids: blockIds,
+              decision: 'reject',
+            });
+            if (applied > 0) dispatch(blockTr);
           }
-          return reviewDecision.applied;
+          return reviewDecision.applied || blockIds.length > 0;
         },
 
       insertTrackedChange:
