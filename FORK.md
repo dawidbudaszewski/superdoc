@@ -103,9 +103,22 @@ git merge --no-ff pr-<PR> -m "chore: merge pr-<PR> into combined branch"
 
 ### Publishing as `@scale/superdoc`
 
-Publish from `packages/superdoc` to the private (AWS CodeArtifact) registry,
-then drop the `link:` override in al-pmo's `frontend/package.json` and pin the
-published version. Bump `version` in `packages/superdoc/package.json` first.
+Publish **from this branch (`release/combined-main`)** — no rebuild. The
+mechanics live in al-pmo's `scripts/superdoc` (so the rename rules stay in one
+place); see that folder's `README.md` → *"Manual publish from
+`release/combined-main` (no rebuild)"* for the exact commands. In short:
+
+1. `apply-scale-namespace.mjs "$PWD" <N>` — transient `@scale` rename + `-scale.N`
+   version stamp (core and react get **different** base versions).
+2. `pnpm install --no-frozen-lockfile` then build both `@scale/superdoc` and
+   `@scale/superdoc-react`.
+3. Auth to CodeArtifact and `pnpm publish` both (core first; react pins the exact
+   core version).
+4. `git checkout -- .` to revert the rename — the `@scale` rename is **never
+   committed**.
+
+Then in al-pmo drop the `link:` override in `frontend/package.json`, pin **both**
+published `-scale.N` versions, and `pnpm install`.
 
 ---
 
