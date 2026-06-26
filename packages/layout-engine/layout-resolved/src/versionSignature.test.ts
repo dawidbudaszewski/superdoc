@@ -39,6 +39,41 @@ describe('sourceAnchorSignature', () => {
   });
 });
 
+describe('deriveBlockVersion - block-level tracked change', () => {
+  const makeParagraph = (trackedChange?: { kind: 'insert' | 'delete'; id: string; author?: string }): FlowBlock => ({
+    kind: 'paragraph',
+    id: 'p-block-tc',
+    attrs: {
+      trackedChangesMode: 'review',
+      trackedChangesEnabled: true,
+      ...(trackedChange ? { trackedChange } : {}),
+    },
+    runs: [{ text: 'inserted', fontFamily: 'Arial', fontSize: 16, pmStart: 1, pmEnd: 9 } as TextRun],
+  });
+
+  // Accepting/rejecting a whole-paragraph structural change only mutates
+  // block.attrs.trackedChange (text + attrs unchanged). Without folding it into
+  // the version, DomPainter reuses the cached fragment and the insert/delete
+  // highlight survives on an already-resolved paragraph.
+  it('produces a different version when a block-level tracked change is added', () => {
+    const plain = deriveBlockVersion(makeParagraph());
+    const inserted = deriveBlockVersion(makeParagraph({ kind: 'insert', id: 'ins-1', author: 'A' }));
+    expect(inserted).not.toBe(plain);
+  });
+
+  it('produces the same version once the block-level tracked change is removed (accept)', () => {
+    const plain = deriveBlockVersion(makeParagraph());
+    const afterAccept = deriveBlockVersion(makeParagraph());
+    expect(afterAccept).toBe(plain);
+  });
+
+  it('distinguishes insert from delete at the block level', () => {
+    const inserted = deriveBlockVersion(makeParagraph({ kind: 'insert', id: 'tc-1' }));
+    const deleted = deriveBlockVersion(makeParagraph({ kind: 'delete', id: 'tc-1' }));
+    expect(inserted).not.toBe(deleted);
+  });
+});
+
 describe('deriveBlockVersion - bidi', () => {
   const makeParagraph = (bidi?: TextRun['bidi']): FlowBlock => ({
     kind: 'paragraph',

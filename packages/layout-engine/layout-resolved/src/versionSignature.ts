@@ -454,7 +454,32 @@ export const deriveBlockVersion = (block: FlowBlock): string => {
     const sdtAttrs = (block.attrs as ParagraphAttrs | undefined)?.sdt;
     const sdtVersion = getSdtMetadataVersion(sdtAttrs);
 
-    const parts = [markerVersion, runsVersion, paragraphAttrsVersion, sdtVersion].filter(Boolean);
+    // Whole-paragraph (block-level) structural tracked change. The v1 layout
+    // adapter stamps paint-ready meta onto `block.attrs.trackedChange` from the
+    // node's `trackChange` attr (the analogue of a table row's tracked change,
+    // handled below). Accepting/rejecting it only mutates that attr — the text,
+    // runs, and other paragraph attrs are unchanged — so without folding it into
+    // the canonical block version the resolved-layout pipeline reuses the cached
+    // fragment and the painter never repaints, leaving the insert/delete
+    // decoration (e.g. the green insert highlight) on an already-resolved
+    // paragraph. Mirror of the table-row fix in this file's `table` branch.
+    const blockTrackedChange = (block.attrs as { trackedChange?: TrackedChangeMeta } | undefined)?.trackedChange;
+    const blockTrackedChangeVersion = blockTrackedChange
+      ? [
+          'block-tc',
+          blockTrackedChange.kind ?? '',
+          blockTrackedChange.id ?? '',
+          blockTrackedChange.author ?? '',
+          blockTrackedChange.authorEmail ?? '',
+          blockTrackedChange.date ?? '',
+          blockTrackedChange.color ?? '',
+          blockTrackedChange.storyKey ?? '',
+        ].join(':')
+      : '';
+
+    const parts = [markerVersion, runsVersion, paragraphAttrsVersion, sdtVersion, blockTrackedChangeVersion].filter(
+      Boolean,
+    );
     return parts.join('|');
   }
 
