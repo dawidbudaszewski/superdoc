@@ -1005,6 +1005,10 @@ export const Table = Node.create({
                 }
               }
 
+              // Column count changed -> the imported `grid` is now stale and
+              // would make the exporter slice this new column back off.
+              clearStaleTableGrid(tr, rect.tableStart - 1);
+
               return true;
             })
             .run();
@@ -1053,6 +1057,10 @@ export const Table = Node.create({
                 }
               }
 
+              // Column count changed -> the imported `grid` is now stale and
+              // would make the exporter slice this new column back off.
+              clearStaleTableGrid(tr, rect.tableStart - 1);
+
               return true;
             })
             .run();
@@ -1067,8 +1075,22 @@ export const Table = Node.create({
        */
       deleteColumn:
         () =>
-        ({ state, dispatch }) => {
-          return deleteColumn(state, dispatch);
+        ({ state, dispatch, chain }) => {
+          if (!isInTable(state)) return false;
+          // Capture the table position BEFORE the delete; removing a column only
+          // shrinks content after this position, so the table node's own pos is
+          // stable across the operation.
+          const { rect } = getCurrentCellAttrs(state);
+          const tablePos = rect.tableStart - 1;
+          return chain()
+            .command(() => deleteColumn(state, dispatch))
+            .command(({ tr }) => {
+              // Column count changed -> drop the now-stale `grid` so the exporter
+              // and review renderer use the surviving cells, not the old layout.
+              clearStaleTableGrid(tr, tablePos);
+              return true;
+            })
+            .run();
         },
 
       /**
@@ -1728,4 +1750,29 @@ function getCurrentCellAttrs(state) {
   let cell = rect.table.nodeAt(pos);
   let attrs = copyCellAttrs(cell);
   return { rect, cell, attrs };
+}
+
+/**
+ * Drop a table's stale `grid` (column-width) attribute after its column COUNT
+ * changes (add/delete column).
+ *
+ * The `grid` attr is the table's imported OOXML column layout and is treated as
+ * AUTHORITATIVE for the column count by both the DOCX exporter
+ * (`preferTableGrid` in tbl-translator: `userEdited !== true && grid.length > 0`)
+ * and the layout/review renderer. The column add/delete commands change the
+ * actual cell count but DON'T touch `grid`, so it goes stale -- the exporter
+ * then clamps the table back to the old column count and SLICES OFF the added
+ * cells (an added column silently vanishes on export/round-trip; a mid-table
+ * insert mis-maps widths). Clearing the grid makes both paths fall back to the
+ * per-cell `colwidth` that these commands already maintain, so the real column
+ * structure survives. No-op when there's no grid to clear.
+ *
+ * @param {import('prosemirror-state').Transaction} tr
+ * @param {number} tablePos - Position of the table node (rect.tableStart - 1).
+ */
+function clearStaleTableGrid(tr, tablePos) {
+  const table = tr.doc.nodeAt(tablePos);
+  if (!table || table.type.name !== 'table') return;
+  if (table.attrs?.grid == null) return;
+  tr.setNodeMarkup(tablePos, null, { ...table.attrs, grid: null });
 }

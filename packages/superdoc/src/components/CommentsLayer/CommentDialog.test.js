@@ -912,6 +912,26 @@ describe('CommentDialog.vue', () => {
     expect(trackedChange.text()).not.toContain('formatting');
   });
 
+  it('renders a paragraph replace as a single "Replaced X with Y" change', async () => {
+    const { wrapper } = await mountDialog({
+      baseCommentOverrides: {
+        trackedChange: true,
+        trackedChangeType: 'trackInsert',
+        trackedChangeDisplayType: 'paragraphReplace',
+        deletedText: 'ECM DATABASE SCHEMA',
+        trackedChangeText: 'ECM DATABASE SCHEMA v2',
+      },
+    });
+
+    const trackedChange = wrapper.find('.tracked-change');
+    expect(trackedChange.text()).toContain('Replaced');
+    expect(trackedChange.text()).toContain('ECM DATABASE SCHEMA');
+    expect(trackedChange.text()).toContain('with');
+    expect(trackedChange.text()).toContain('ECM DATABASE SCHEMA v2');
+    // One change row → one accept/reject, not two.
+    expect(wrapper.findAll('.tracked-change')).toHaveLength(1);
+  });
+
   it('calls custom accept handler instead of default behavior when configured', async () => {
     const customAcceptHandler = vi.fn();
 

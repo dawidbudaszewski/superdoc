@@ -14,6 +14,7 @@ import {
 } from '../../extensions/track-changes/constants.js';
 import { getTrackChanges } from '../../extensions/track-changes/trackChangesHelpers/getTrackChanges.js';
 import { enumerateStructuralRowChanges } from '../../extensions/track-changes/trackChangesHelpers/structuralRowChanges.js';
+import { enumerateStructuralBlockChanges } from '../../extensions/track-changes/trackChangesHelpers/structuralBlockChanges.js';
 import {
   projectInternalTrackChangeType,
   type InternalTrackChangeSubtype,
@@ -45,6 +46,12 @@ export type GroupedTrackedChange = {
   hasFormat: boolean;
   attrs: Record<string, unknown>;
   excerpt?: string;
+  /**
+   * The deleted (old) text of a structural replace, kept alongside `excerpt`
+   * (the new text) so a "Replaced X with Y" bubble can show both halves. Only
+   * set for `paragraph-replace` structural changes.
+   */
+  deletedExcerpt?: string;
   wordRevisionIds?: TrackChangeWordRevisionIds;
   overlap?: TrackChangeOverlapInfo;
   /** Set for whole-object structural revisions (e.g. whole-table insert/delete). */
@@ -471,6 +478,54 @@ export function groupTrackedChanges(editor: Editor): GroupedTrackedChange[] {
         ? structural.side === 'insertion'
           ? { insert: structural.sourceId }
           : { delete: structural.sourceId }
+        : undefined,
+    });
+  }
+
+  // Whole-paragraph structural revisions (Google-Docs-style "re-suggest the
+  // entire paragraph") also live on node attrs (`paragraph.attrs.trackChange`),
+  // not marks, so they are enumerated separately and appended as their own
+  // grouped changes — exactly like whole-table rows above. Each emits one
+  // decidable structural entry; accept/reject routes by `commandRawId` through
+  // the v1 `acceptTrackedChangeById`/`rejectTrackedChangeById` commands, which
+  // resolve a paragraph block via `applyBlockTrackedChangeResolution`.
+  const blockChanges = enumerateStructuralBlockChanges(editor.state);
+  for (const block of blockChanges) {
+    // A replace spans both halves, so its `from`/`to` envelope would yield
+    // "OLD" + "NEW" concatenated. Prefer the enumerator's explicit `excerpt`
+    // (the new text) and carry the deleted (old) text separately so the bubble
+    // can render "Replaced OLD with NEW".
+    const excerpt = block.excerpt
+      ? normalizeExcerpt(block.excerpt)
+      : normalizeExcerpt(editor.state.doc.textBetween(block.from, block.to, ' ', '￼'));
+    const deletedExcerpt = block.deletedExcerpt ? normalizeExcerpt(block.deletedExcerpt) : undefined;
+    grouped.push({
+      rawId: block.id,
+      commandRawId: block.commandRawId,
+      id: block.id,
+      from: block.from,
+      to: block.to,
+      hasInsert: false,
+      hasDelete: false,
+      hasFormat: false,
+      structural: { side: block.side, subtype: block.subtype },
+      attrs: {
+        id: block.commandRawId,
+        sourceId: block.sourceId || undefined,
+        author: block.author || undefined,
+        authorEmail: block.authorEmail || undefined,
+        authorImage: block.authorImage || undefined,
+        date: block.date || undefined,
+        importedAuthor: block.importedAuthor || undefined,
+        operationId: block.operationId || undefined,
+        origin: block.sourceId ? 'word' : undefined,
+      },
+      excerpt,
+      deletedExcerpt,
+      wordRevisionIds: block.sourceId
+        ? block.side === 'insertion'
+          ? { insert: block.sourceId }
+          : { delete: block.sourceId }
         : undefined,
     });
   }

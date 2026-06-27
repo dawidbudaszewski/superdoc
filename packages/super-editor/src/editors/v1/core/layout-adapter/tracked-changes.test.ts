@@ -23,6 +23,7 @@ import {
   trackedChangesCompatible,
   shouldHideTrackedNode,
   annotateBlockWithTrackedChange,
+  applyBlockTrackedChangeToRuns,
   resetRunFormatting,
   applyFormatChangeMarks,
   applyTrackedChangesModeToRuns,
@@ -608,6 +609,63 @@ describe('tracked-changes', () => {
         existing: 'value',
         trackedChange: meta,
       });
+    });
+  });
+
+  describe('applyBlockTrackedChangeToRuns', () => {
+    const config: TrackedChangesConfig = { enabled: true, mode: 'review' };
+
+    it('stamps the block meta onto every text run so the run painter renders it', () => {
+      const runs: Run[] = [
+        { text: 'ECM ', fontFamily: 'Arial', fontSize: 16 } as TextRun,
+        { text: 'DATABASE', fontFamily: 'Arial', fontSize: 16 } as TextRun,
+      ];
+      const meta: TrackedChangeMeta = { kind: 'delete', id: 'del-1' };
+      applyBlockTrackedChangeToRuns(runs, meta, config);
+      expect((runs[0] as TextRun).trackedChange).toBe(meta);
+      expect((runs[1] as TextRun).trackedChange).toBe(meta);
+    });
+
+    it('does not clobber a run that already carries its own inline tracked change', () => {
+      const inline: TrackedChangeMeta = { kind: 'insert', id: 'inline-1' };
+      const runs: Run[] = [{ text: 'kept', fontFamily: 'Arial', fontSize: 16, trackedChange: inline } as TextRun];
+      const meta: TrackedChangeMeta = { kind: 'delete', id: 'del-1' };
+      applyBlockTrackedChangeToRuns(runs, meta, config);
+      expect((runs[0] as TextRun).trackedChange).toBe(inline);
+    });
+
+    it('skips runs that already carry a multi-layer trackedChanges array', () => {
+      const layers: TrackedChangeMeta[] = [
+        { kind: 'insert', id: 'a' },
+        { kind: 'delete', id: 'b' },
+      ];
+      const runs: Run[] = [{ text: 'kept', fontFamily: 'Arial', fontSize: 16, trackedChanges: layers } as TextRun];
+      const meta: TrackedChangeMeta = { kind: 'delete', id: 'del-1' };
+      applyBlockTrackedChangeToRuns(runs, meta, config);
+      expect((runs[0] as TextRun).trackedChange).toBeUndefined();
+    });
+
+    it('is a no-op when meta is undefined', () => {
+      const runs: Run[] = [{ text: 'x', fontFamily: 'Arial', fontSize: 16 } as TextRun];
+      applyBlockTrackedChangeToRuns(runs, undefined, config);
+      expect((runs[0] as TextRun).trackedChange).toBeUndefined();
+    });
+
+    it('is a no-op when tracked changes are disabled or mode is off', () => {
+      const meta: TrackedChangeMeta = { kind: 'insert', id: 'ins-1' };
+      const disabled: Run[] = [{ text: 'x', fontFamily: 'Arial', fontSize: 16 } as TextRun];
+      applyBlockTrackedChangeToRuns(disabled, meta, { enabled: false, mode: 'review' });
+      expect((disabled[0] as TextRun).trackedChange).toBeUndefined();
+
+      const off: Run[] = [{ text: 'x', fontFamily: 'Arial', fontSize: 16 } as TextRun];
+      applyBlockTrackedChangeToRuns(off, meta, { enabled: true, mode: 'off' });
+      expect((off[0] as TextRun).trackedChange).toBeUndefined();
+    });
+
+    it('handles undefined / empty run lists gracefully', () => {
+      const meta: TrackedChangeMeta = { kind: 'insert', id: 'ins-1' };
+      expect(() => applyBlockTrackedChangeToRuns(undefined, meta, config)).not.toThrow();
+      expect(() => applyBlockTrackedChangeToRuns([], meta, config)).not.toThrow();
     });
   });
 

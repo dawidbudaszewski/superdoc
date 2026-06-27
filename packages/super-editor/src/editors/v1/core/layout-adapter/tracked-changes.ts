@@ -339,6 +339,37 @@ export const shouldHideTrackedNode = (meta: TrackedChangeMeta | undefined, confi
 };
 
 /**
+ * Build {@link TrackedChangeMeta} from a block node's `trackChange` attribute
+ * (the block-level structural tracked change). Accepts the canonical
+ * `{ kind: 'insert' | 'delete' }` shape used by paragraphs and the OOXML
+ * `{ type: 'rowInsert' | 'rowDelete' }` shape used by table rows. Mirrors
+ * `buildTrackedChangeMetaFromMark` (inline). Returns undefined when the node
+ * is untracked.
+ */
+export const buildBlockTrackedChangeMetaFromAttr = (
+  attrs: Record<string, unknown> | undefined,
+  storyKey?: string,
+): TrackedChangeMeta | undefined => {
+  const tc = attrs?.trackChange as Record<string, unknown> | null | undefined;
+  if (!tc || typeof tc !== 'object') return undefined;
+  const kind: TrackedChangeKind | undefined =
+    tc.kind === 'insert' || tc.kind === 'delete'
+      ? tc.kind
+      : tc.type === 'rowInsert'
+        ? 'insert'
+        : tc.type === 'rowDelete'
+          ? 'delete'
+          : undefined;
+  if (!kind) return undefined;
+  const meta: TrackedChangeMeta = { kind, id: deriveTrackedChangeId(kind, tc) };
+  if (typeof tc.author === 'string' && tc.author) meta.author = tc.author;
+  if (typeof tc.authorEmail === 'string' && tc.authorEmail) meta.authorEmail = tc.authorEmail;
+  if (typeof tc.date === 'string' && tc.date) meta.date = tc.date;
+  if (typeof storyKey === 'string' && storyKey.length > 0) meta.storyKey = storyKey;
+  return meta;
+};
+
+/**
  * Annotates a block with tracked change metadata if applicable
  *
  * @param block - The block to annotate
@@ -356,6 +387,41 @@ export const annotateBlockWithTrackedChange = (
     ...(block.attrs ?? {}),
     trackedChange: meta,
   };
+};
+
+/**
+ * Propagates a whole-paragraph structural tracked change onto the paragraph's
+ * runs so the existing run-level painter ({@link applyTrackedChangeDecorations})
+ * renders the insert/delete visual (red/green + review/original/final modes).
+ *
+ * The DOM painter only draws tracked changes for inline runs and table cells —
+ * it has no paragraph block-level renderer. Stamping `block.attrs.trackedChange`
+ * alone (via {@link annotateBlockWithTrackedChange}) therefore produces no
+ * visual for a whole-paragraph insert/delete. Pushing the same meta down to each
+ * text run reuses the run machinery end-to-end.
+ *
+ * Runs that already carry their own inline tracked change (their own marks) are
+ * left untouched so inline edits inside an otherwise-tracked paragraph keep
+ * their own metadata.
+ *
+ * @param runs - The paragraph block's runs.
+ * @param meta - The block's resolved tracked-change metadata.
+ * @param config - Tracked-changes mode/enabled (same source inline runs use).
+ */
+export const applyBlockTrackedChangeToRuns = (
+  runs: Run[] | undefined,
+  meta: TrackedChangeMeta | undefined,
+  config?: TrackedChangesConfig,
+): void => {
+  if (!meta || !runs || runs.length === 0) return;
+  if (!config || !config.enabled || config.mode === 'off') return;
+  for (const run of runs) {
+    if (!isTextRun(run)) continue;
+    if (run.trackedChange || (Array.isArray(run.trackedChanges) && run.trackedChanges.length > 0)) {
+      continue;
+    }
+    run.trackedChange = meta;
+  }
 };
 
 /**
