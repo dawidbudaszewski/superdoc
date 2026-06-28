@@ -314,10 +314,13 @@ export const Image = Node.create({
           let { width, height } = size ?? {};
           if (width) style += `width: ${width}px;`;
           if (height && shouldCover) {
-            // When shouldCover is true (from <a:stretch><a:fillRect/> with empty srcRect),
-            // scale the image to cover the extent and clip overflow (like MS Word)
-            // MS Word anchors to top-left corner, clipping from right/bottom
-            style += `height: ${height}px; object-fit: cover; object-position: left top;`;
+            // shouldCover comes from <a:stretch><a:fillRect/> with empty srcRect, which in
+            // OOXML means "stretch the source to fill the extent rectangle". That is CSS
+            // `object-fit: fill` (distort to the box), NOT `cover` (preserve aspect + crop):
+            // Word never crops a plain stretch/fillRect image. When the extent aspect matches
+            // the image these are identical; when they differ, `cover` clips the logo, so use
+            // `fill` to match Word and avoid the clip.
+            style += `height: ${height}px; object-fit: fill;`;
           } else if (height) style += 'height: auto;';
           return { style };
         },
