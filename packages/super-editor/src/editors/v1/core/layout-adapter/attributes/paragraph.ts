@@ -507,20 +507,41 @@ export const computeRunAttrs = (
   defaultFontSizePx = 12,
   defaultFontFamily = 'Times New Roman',
 ): ResolvedRunProperties => {
-  let fontFamily;
+  // Complex-script (Arabic/Hebrew/etc.) runs render with the cs font slot
+  // (w:rFonts w:cs) and complex-script size (w:szCs), matching Word. Without this
+  // the layout engine paints Arabic with the ascii font (often Times) at the Latin
+  // size, diverging from Word/other viewers in both glyph metrics and size — the
+  // same gap fixed for the editable path in super-converter/styles.js.
+  const isComplexScript = runProps.rtl === true || runProps.cs === true;
+  const csFontName = runProps.fontFamily?.cs;
 
+  let fontFamily;
   if (converterContext) {
+    const csResolved =
+      isComplexScript && csFontName
+        ? resolveDocxFontFamily({ ascii: csFontName } as Record<string, unknown>, converterContext.docx)
+        : null;
     fontFamily =
-      resolveDocxFontFamily(runProps.fontFamily as Record<string, unknown>, converterContext.docx) || defaultFontFamily;
+      csResolved ||
+      resolveDocxFontFamily(runProps.fontFamily as Record<string, unknown>, converterContext.docx) ||
+      defaultFontFamily;
   } else {
     fontFamily =
-      runProps.fontFamily?.ascii || runProps.fontFamily?.hAnsi || runProps.fontFamily?.eastAsia || defaultFontFamily;
+      (isComplexScript ? csFontName : undefined) ||
+      runProps.fontFamily?.ascii ||
+      runProps.fontFamily?.hAnsi ||
+      runProps.fontFamily?.eastAsia ||
+      defaultFontFamily;
   }
   const vertAlign = runProps.vertAlign as VerticalTextAlign | undefined;
   const baselineShift = normalizeBaselineShift(
     runProps.position != null && Number.isFinite(runProps.position) ? runProps.position / 2 : undefined,
   );
-  const baseFontSize = runProps.fontSize ? ptToPx(runProps.fontSize / 2)! : defaultFontSizePx;
+  // Word sizes complex-script text from w:szCs regardless of w:sz; for Latin runs
+  // szCs is only a fallback when w:sz is absent.
+  const useComplexScriptSize = runProps.fontSizeCs != null && (isComplexScript || runProps.fontSize == null);
+  const effectiveHalfPoints = useComplexScriptSize ? runProps.fontSizeCs : runProps.fontSize;
+  const baseFontSize = effectiveHalfPoints != null ? ptToPx(effectiveHalfPoints / 2)! : defaultFontSizePx;
   const fontSize = scaleFontSizeForVerticalText(baseFontSize, { vertAlign, baselineShift });
 
   return {

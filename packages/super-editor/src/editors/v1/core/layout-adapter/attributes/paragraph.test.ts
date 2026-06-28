@@ -192,7 +192,12 @@ describe('computeParagraphAttrs', () => {
     expect(paragraphAttrs.indent?.right).toBe(twipsToPx(720));
   });
 
-  it('mirrors physical indent values for RTL paragraphs', () => {
+  it('mirrors physical indent sides for RTL paragraphs but preserves firstLine/hanging', () => {
+    // Sides swap so a left indent lands on the visual right edge. firstLine and
+    // hanging are NOT negated: the RTL paint path applies them via CSS
+    // text-indent on a dir="rtl" element (same as the editable v1 path), where
+    // the browser already accounts for direction. Negating would outdent the
+    // first line the wrong way.
     const paragraph: PMNode = {
       type: { name: 'paragraph' },
       attrs: {
@@ -207,8 +212,8 @@ describe('computeParagraphAttrs', () => {
 
     expect(paragraphAttrs.indent?.left).toBe(twipsToPx(1440));
     expect(paragraphAttrs.indent?.right).toBe(twipsToPx(720));
-    expect(paragraphAttrs.indent?.firstLine).toBe(-twipsToPx(360));
-    expect(paragraphAttrs.indent?.hanging).toBe(-twipsToPx(240));
+    expect(paragraphAttrs.indent?.firstLine).toBe(twipsToPx(360));
+    expect(paragraphAttrs.indent?.hanging).toBe(twipsToPx(240));
   });
 
   it('exposes resolved paragraph properties when no converter context is provided', () => {
@@ -674,5 +679,38 @@ describe('computeRunAttrs', () => {
   it('does not set baselineShift for zero position', () => {
     const result = computeRunAttrs({ position: 0 } as never);
     expect(result.baselineShift).toBeUndefined();
+  });
+
+  it('uses the cs font for a complex-script (rtl) run', () => {
+    // Arabic runs carry the document font in the cs slot while ascii is a Latin
+    // fallback (often Times). The paginated engine must paint the cs font.
+    const runProps = {
+      fontFamily: { ascii: 'Times New Roman', hAnsi: 'Times New Roman', cs: 'Arial' },
+      rtl: true,
+    };
+    const result = computeRunAttrs(runProps as never);
+    expect(result.fontFamily).toContain('Arial');
+    expect(result.fontFamily).not.toContain('Times New Roman');
+  });
+
+  it('keeps the ascii font for a non-complex-script run that also defines a cs font', () => {
+    const runProps = {
+      fontFamily: { ascii: 'Times New Roman', hAnsi: 'Times New Roman', cs: 'Arial' },
+    };
+    const result = computeRunAttrs(runProps as never);
+    expect(result.fontFamily).toContain('Times New Roman');
+  });
+
+  it('sizes a complex-script (rtl) run from szCs even when w:sz is present', () => {
+    // sz = 24 (12pt) but szCs = 38 (19pt) with rtl: Word sizes Arabic from szCs.
+    const latin = computeRunAttrs({ fontSize: 24 } as never);
+    const complex = computeRunAttrs({ fontSize: 24, fontSizeCs: 38, rtl: true } as never);
+    expect(complex.fontSize).toBeGreaterThan(latin.fontSize);
+  });
+
+  it('falls back to szCs when a non-complex-script run omits w:sz', () => {
+    const result = computeRunAttrs({ fontSizeCs: 38 } as never);
+    const explicit = computeRunAttrs({ fontSize: 38 } as never);
+    expect(result.fontSize).toBeCloseTo(explicit.fontSize);
   });
 });
