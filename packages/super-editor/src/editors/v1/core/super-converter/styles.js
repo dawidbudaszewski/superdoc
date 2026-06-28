@@ -175,6 +175,36 @@ export function encodeMarksFromRPr(runProperties, docx) {
     }
   });
 
+  // Complex-script sizing: Word sizes complex-script text (Arabic/Hebrew/etc.)
+  // from <w:szCs>, while <w:sz> only governs the Latin portion of a run. A run
+  // flagged complex-script via <w:rtl/> must therefore render at szCs even when
+  // an explicit <w:sz> is present, otherwise the editor shows the Latin size
+  // (often a 12pt default emitted by generators) while Word/exported DOCX render
+  // the much larger szCs — the exact mismatch users see in tracked-change diffs.
+  // For non-complex-script runs we keep szCs purely as a fallback when no Latin
+  // <w:sz> exists, so ordinary Latin runs are unaffected.
+  const isComplexScript = runProperties.rtl === true;
+  const shouldUseComplexScriptSize =
+    runProperties.fontSizeCs != null && (isComplexScript || textStyleAttrs.fontSize == null);
+  if (shouldUseComplexScriptSize) {
+    const csPoints = halfPointToPoints(runProperties.fontSizeCs);
+    if (Number.isFinite(csPoints)) {
+      textStyleAttrs.fontSize = `${csPoints}pt`;
+    }
+  }
+
+  // Complex-script font face: Word renders complex-script text (Arabic/Hebrew/etc.)
+  // with the <w:rFonts w:cs> slot, while <w:ascii>/<w:hAnsi> govern only the Latin
+  // portion. The editor stores the cs font as round-trip metadata (csFontFamily) but
+  // paints the ascii font, so Arabic glyphs fall back through the Latin font (often
+  // Times) instead of the document's complex-script font — producing different glyph
+  // metrics than Word/other viewers and shifting tab-positioned text. For a run flagged
+  // complex-script via <w:rtl/>, render the cs font so the on-screen face matches the
+  // document. The csFontFamily attr is preserved for export round-tripping.
+  if (isComplexScript && textStyleAttrs.csFontFamily) {
+    textStyleAttrs.fontFamily = textStyleAttrs.csFontFamily;
+  }
+
   if (Object.keys(textStyleAttrs).length) {
     marks.push({ type: 'textStyle', attrs: textStyleAttrs });
   }
@@ -243,13 +273,29 @@ export function encodeCSSFromPPr(paragraphProperties, hasPreviousParagraph, next
   if (indent && typeof indent === 'object') {
     const hasIndentValue = Object.values(indent).some((value) => value != null && Number(value) !== 0);
     if (hasIndentValue) {
-      const { left, right, firstLine, hanging } = indent;
-      if (left != null) {
-        css['margin-left'] = `${twipsToPixels(left)}px`;
+      const { left, right, start, end, firstLine, hanging } = indent;
+
+      // Direction-aware indents. OOXML `w:start`/`w:end` are logical (leading/
+      // trailing) edges; legacy `w:left`/`w:right` are treated the same way by
+      // Word — in an RTL paragraph a `w:left` indent is applied to the visual
+      // RIGHT (leading) edge. Resolve to logical leading/trailing first, then map
+      // back to physical CSS margins using the paragraph direction. Without this,
+      // a large start-side indent on an RTL paragraph lands on the wrong physical
+      // side, collapsing the usable line width so the text wraps — and with
+      // `w:jc="both"` the wrapped lines get stretched into large gaps. This is the
+      // exact failure seen on RTL signature blocks that should fit on one line.
+      const isRtl = paragraphProperties.rightToLeft === true;
+      const leading = start != null ? start : left;
+      const trailing = end != null ? end : right;
+      const marginLeftTwips = isRtl ? trailing : leading;
+      const marginRightTwips = isRtl ? leading : trailing;
+      if (marginLeftTwips != null) {
+        css['margin-left'] = `${twipsToPixels(marginLeftTwips)}px`;
       }
-      if (right != null) {
-        css['margin-right'] = `${twipsToPixels(right)}px`;
+      if (marginRightTwips != null) {
+        css['margin-right'] = `${twipsToPixels(marginRightTwips)}px`;
       }
+
       if (firstLine != null && !hanging) {
         css['text-indent'] = `${twipsToPixels(firstLine)}px`;
       }

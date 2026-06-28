@@ -33,6 +33,70 @@ describe('encodeMarksFromRPr', () => {
     });
   });
 
+  it('falls back to szCs for the editable fontSize when no w:sz is present', () => {
+    // Arabic/complex-script runs commonly carry only <w:szCs> (here 38 half-points
+    // = 19pt) and no <w:sz>. Without the fallback the editor would render these at
+    // the 12pt default; Word renders them at szCs.
+    const rPr = { fontSizeCs: 38 };
+    const marks = encodeMarksFromRPr(rPr, {});
+    expect(marks).toContainEqual({
+      type: 'textStyle',
+      attrs: { fontSize: '19pt' },
+    });
+  });
+
+  it('prefers an explicit w:sz over szCs for a non-complex-script run', () => {
+    // sz = 24 (12pt), szCs = 38 (19pt), no rtl flag. For Latin runs the Latin
+    // size must win so we never override a run that does specify <w:sz>.
+    const rPr = { fontSize: 24, fontSizeCs: 38 };
+    const marks = encodeMarksFromRPr(rPr, {});
+    expect(marks).toContainEqual({
+      type: 'textStyle',
+      attrs: { fontSize: '12pt' },
+    });
+  });
+
+  it('prefers szCs over an explicit w:sz for a complex-script (rtl) run', () => {
+    // sz = 24 (12pt), szCs = 38 (19pt) with <w:rtl/>. Word sizes complex-script
+    // text from szCs regardless of the Latin <w:sz>, so the editor must too —
+    // otherwise AI-generated Arabic runs (which often emit a 12pt <w:sz>) render
+    // far smaller on-screen than in the exported DOCX.
+    const rPr = { fontSize: 24, fontSizeCs: 38, rtl: true };
+    const marks = encodeMarksFromRPr(rPr, {});
+    expect(marks).toContainEqual({
+      type: 'textStyle',
+      attrs: { fontSize: '19pt' },
+    });
+  });
+
+  it('renders the cs font face for a complex-script (rtl) run', () => {
+    // The run paints with the ascii font (Times New Roman) but carries a distinct
+    // complex-script font in the cs slot (Arial). Word renders Arabic glyphs with the
+    // cs font; without this the editor paints Arabic in Times, giving different glyph
+    // metrics than the document (which shifts tab-positioned text). The cs font becomes
+    // the rendered fontFamily while csFontFamily is retained for export round-tripping.
+    const rPr = {
+      fontFamily: { ascii: 'Times New Roman', hAnsi: 'Times New Roman', cs: 'Arial' },
+      rtl: true,
+    };
+    const marks = encodeMarksFromRPr(rPr, {});
+    const textStyleMark = marks.find((m) => m.type === 'textStyle');
+    expect(textStyleMark.attrs.fontFamily).toMatch(/^Arial/);
+    expect(textStyleMark.attrs.csFontFamily).toMatch(/^Arial/);
+  });
+
+  it('keeps the ascii font face for a non-complex-script run with a cs font', () => {
+    // No <w:rtl/>: this is a Latin run, so the rendered face must stay the ascii font
+    // and the cs slot remains round-trip metadata only.
+    const rPr = {
+      fontFamily: { ascii: 'Times New Roman', hAnsi: 'Times New Roman', cs: 'Arial' },
+    };
+    const marks = encodeMarksFromRPr(rPr, {});
+    const textStyleMark = marks.find((m) => m.type === 'textStyle');
+    expect(textStyleMark.attrs.fontFamily).toMatch(/^Times New Roman/);
+    expect(textStyleMark.attrs.csFontFamily).toMatch(/^Arial/);
+  });
+
   it('should encode underline', () => {
     const rPr = { underline: { 'w:val': 'single', 'w:color': 'auto' } };
     const marks = encodeMarksFromRPr(rPr, {});
@@ -374,6 +438,44 @@ describe('encodeCSSFromPPr', () => {
       'text-indent': '24px',
       'text-align': 'justify',
     });
+  });
+
+  it('maps the start-side indent to margin-right for an RTL paragraph', () => {
+    // Word treats `w:left` in a bidi paragraph as the logical leading (visual
+    // right) edge. A large left indent must therefore become margin-right so the
+    // RTL line keeps its width and does not wrap (e.g. signature blocks). The
+    // hanging outdent stays as a negative text-indent (browser applies it to the
+    // start edge under dir="rtl").
+    const css = encodeCSSFromPPr({
+      indent: { left: 5760, hanging: 1530 },
+      justification: 'both',
+      rightToLeft: true,
+    });
+
+    expect(css['margin-right']).toBe('384px');
+    expect(css['margin-left']).toBeUndefined();
+    expect(css['text-indent']).toBe('-102px');
+  });
+
+  it('keeps physical left/right indents for an LTR paragraph', () => {
+    const css = encodeCSSFromPPr({
+      indent: { left: 720, right: 1440 },
+      rightToLeft: false,
+    });
+
+    expect(css['margin-left']).toBe('48px');
+    expect(css['margin-right']).toBe('96px');
+  });
+
+  it('prefers logical start/end indents over physical left/right', () => {
+    const ltr = encodeCSSFromPPr({ indent: { start: 720, end: 360, left: 99, right: 99 } });
+    expect(ltr['margin-left']).toBe('48px');
+    expect(ltr['margin-right']).toBe('24px');
+
+    const rtl = encodeCSSFromPPr({ indent: { start: 720, end: 360 }, rightToLeft: true });
+    // start (leading) → visual right, end (trailing) → visual left for RTL.
+    expect(rtl['margin-right']).toBe('48px');
+    expect(rtl['margin-left']).toBe('24px');
   });
 
   it('forces drop caps to use single-line spacing regardless of provided spacing', () => {
