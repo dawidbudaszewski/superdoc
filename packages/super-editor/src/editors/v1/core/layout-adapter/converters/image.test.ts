@@ -173,9 +173,11 @@ describe('image converter', () => {
      * values are clipped to fit the extent rectangle.
      */
     describe('shouldCover (OOXML stretch/clip behavior)', () => {
-      it('sets objectFit to cover when shouldCover is true (stretch with empty srcRect)', () => {
-        // Simulates: <a:stretch><a:fillRect/></a:stretch> with empty <a:srcRect/>
-        // Example: whalar header2.xml - logo needs to be scaled and clipped
+      it('sets objectFit to fill when shouldCover is true (stretch with empty srcRect)', () => {
+        // Simulates: <a:stretch><a:fillRect/></a:stretch> with empty <a:srcRect/>.
+        // OOXML stretch/fillRect = stretch source to fill the extent = object-fit: fill
+        // (Word distorts to the box, it does not crop). Using `cover` here clipped logos
+        // whose extent aspect differed from the image aspect.
         const node: PMNode = {
           type: 'image',
           attrs: {
@@ -186,13 +188,13 @@ describe('image converter', () => {
 
         const result = imageNodeToBlock(node, mockBlockIdGenerator, mockPositionMap) as ImageBlock;
 
-        expect(result.objectFit).toBe('cover');
+        expect(result.objectFit).toBe('fill');
       });
 
-      it('sets objectFit to cover when shouldCover is true (stretch with positive srcRect)', () => {
-        // Simulates: <a:stretch><a:fillRect/></a:stretch> with <a:srcRect r="84800"/>
-        // Example: whalar header1.xml - 84.8% cropped from right, needs CSS clipping
-        // Since we don't implement actual srcRect cropping, CSS cover handles it
+      it('sets objectFit to fill when shouldCover is true (stretch with positive srcRect)', () => {
+        // Simulates: <a:stretch><a:fillRect/></a:stretch> with <a:srcRect r="84800"/>.
+        // Plain stretch/fillRect maps to fill; explicit srcRect clipping is handled
+        // separately via clipPath + objectFit:'fill' at import time.
         const node: PMNode = {
           type: 'image',
           attrs: {
@@ -203,7 +205,7 @@ describe('image converter', () => {
 
         const result = imageNodeToBlock(node, mockBlockIdGenerator, mockPositionMap) as ImageBlock;
 
-        expect(result.objectFit).toBe('cover');
+        expect(result.objectFit).toBe('fill');
       });
 
       it('does not set objectFit to cover when shouldCover is false (negative srcRect)', () => {
