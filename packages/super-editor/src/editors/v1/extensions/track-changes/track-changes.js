@@ -46,6 +46,12 @@ const readReplacementsMode = (editor) =>
   editor?.options?.trackedChanges?.replacements === 'independent' ? 'independent' : 'paired';
 
 /**
+ * A permission denial from the decision engine must fail closed: the
+ * block-level fallbacks below must not resolve changes the user may not decide.
+ */
+const isPermissionDenied = (reviewDecision) => reviewDecision.failure?.code === 'PERMISSION_DENIED';
+
+/**
  * Runs the atomic decision engine, dispatches the resulting transaction, and
  * emits bubble lifecycle events from the decision receipt.
  */
@@ -358,6 +364,7 @@ export const TrackChanges = Extension.create({
             target: { kind: 'id', id },
           });
           if (reviewDecision.applied) return true;
+          if (isPermissionDenied(reviewDecision)) return false;
 
           // Block-level fallback: the review-model decision engine only handles
           // inline (mark-based) tracked changes; a paragraph/row structural
@@ -410,7 +417,9 @@ export const TrackChanges = Extension.create({
           // No inline changes (decision was a no-op, so nothing dispatched and
           // the appendToTr hook never ran) but block changes remain: resolve
           // them in their own transaction from the (still-current) state.
-          if (dispatch && !reviewDecision.applied && blockIds.length) {
+          const resolveBlocksAlone =
+            !reviewDecision.applied && blockIds.length > 0 && !isPermissionDenied(reviewDecision);
+          if (dispatch && resolveBlocksAlone) {
             const blockTr = state.tr;
             blockTr.setMeta('inputType', 'acceptReject');
             const { applied } = applyBlockTrackedChangeResolution({
@@ -421,7 +430,7 @@ export const TrackChanges = Extension.create({
             });
             if (applied > 0) dispatch(blockTr);
           }
-          return reviewDecision.applied || blockIds.length > 0;
+          return reviewDecision.applied || resolveBlocksAlone;
         },
 
       rejectTrackedChangeById:
@@ -435,6 +444,7 @@ export const TrackChanges = Extension.create({
             target: { kind: 'id', id },
           });
           if (reviewDecision.applied) return true;
+          if (isPermissionDenied(reviewDecision)) return false;
 
           // Block-level fallback (see acceptTrackedChangeById for rationale).
           const blockEntries = getBlockTrackedChanges(state);
@@ -524,7 +534,9 @@ export const TrackChanges = Extension.create({
               ? (tr, s) => applyBlockTrackedChangeResolution({ tr, state: s, ids: blockIds, decision: 'reject' })
               : undefined,
           });
-          if (dispatch && !reviewDecision.applied && blockIds.length) {
+          const resolveBlocksAlone =
+            !reviewDecision.applied && blockIds.length > 0 && !isPermissionDenied(reviewDecision);
+          if (dispatch && resolveBlocksAlone) {
             const blockTr = state.tr;
             blockTr.setMeta('inputType', 'acceptReject');
             const { applied } = applyBlockTrackedChangeResolution({
@@ -535,7 +547,7 @@ export const TrackChanges = Extension.create({
             });
             if (applied > 0) dispatch(blockTr);
           }
-          return reviewDecision.applied || blockIds.length > 0;
+          return reviewDecision.applied || resolveBlocksAlone;
         },
 
       insertTrackedChange:
