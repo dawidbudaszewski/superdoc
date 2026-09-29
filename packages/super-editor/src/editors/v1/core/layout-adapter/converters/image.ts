@@ -278,10 +278,17 @@ export function imageNodeToBlock(
   const alphaModFix = isPlainObject(attrs.alphaModFix) ? attrs.alphaModFix : undefined;
   const alphaModFixAmt = pickNumber(alphaModFix?.amt);
 
+  // OOXML <a:stretch><a:fillRect/> (empty/no srcRect) means "stretch the source to
+  // fill the extent rectangle" — i.e. CSS `object-fit: fill` (distort to the box), not
+  // `cover` (preserve aspect + crop). Word never crops a plain stretch/fillRect image.
+  // When the extent aspect matches the image aspect (the common case) fill and cover are
+  // visually identical, but when they differ (e.g. a logo whose w:ext was authored at a
+  // slightly different ratio) `cover` crops the image, clipping the logo. `fill` matches
+  // Word and removes the clip. (`shouldCover` keeps its name for the import/export attr.)
   const objectFit: ObjectFit | undefined = isAllowedObjectFit(explicitObjectFit)
     ? explicitObjectFit
     : shouldCover
-      ? 'cover'
+      ? 'fill'
       : display === 'inline'
         ? 'scale-down'
         : isAnchor
