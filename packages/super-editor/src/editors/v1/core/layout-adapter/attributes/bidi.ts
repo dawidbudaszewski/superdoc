@@ -8,28 +8,35 @@ import type { ParagraphIndent } from '@superdoc/contracts';
 
 /**
  * Mirror paragraph indent for RTL text.
- * Swaps left/right indents and inverts firstLine/hanging.
+ *
+ * Swaps the physical left/right indents so a logical start-side indent
+ * (resolved to `left` upstream) lands on the visual RIGHT edge in RTL.
+ *
+ * `firstLine`/`hanging` are intentionally left untouched. The RTL paint path
+ * renders each line into a `dir="rtl"` element and applies the first-line
+ * offset via CSS `text-indent` (see resolveParagraph + renderParagraphContent).
+ * Because the element is already direction-aware, a positive `text-indent`
+ * indents from the right exactly as the browser expects — the same approach
+ * the editable v1 path uses in super-converter/styles.js. Negating these
+ * values here would invert that into an outdent, pushing RTL first lines the
+ * wrong way (the signature/greeting indentation regression).
  */
 export const mirrorIndentForRtl = (indent: ParagraphIndent): ParagraphIndent => {
-  const mirrored: ParagraphIndent = {};
-  let mutated = false;
+  const swapsSides = indent.left != null || indent.right != null;
+  if (!swapsSides) return indent;
+
+  const mirrored: ParagraphIndent = { ...indent };
 
   if (indent.right != null) {
     mirrored.left = indent.right;
-    mutated = true;
+  } else {
+    delete mirrored.left;
   }
   if (indent.left != null) {
     mirrored.right = indent.left;
-    mutated = true;
-  }
-  if (indent.firstLine != null) {
-    mirrored.firstLine = -indent.firstLine;
-    mutated = true;
-  }
-  if (indent.hanging != null) {
-    mirrored.hanging = -indent.hanging;
-    mutated = true;
+  } else {
+    delete mirrored.right;
   }
 
-  return mutated ? mirrored : indent;
+  return mirrored;
 };
