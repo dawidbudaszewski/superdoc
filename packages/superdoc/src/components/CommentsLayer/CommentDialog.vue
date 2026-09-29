@@ -1099,6 +1099,20 @@ watch(editingCommentId, (commentId) => {
             <div v-else-if="comment.trackedChangeDisplayType === 'tableDelete'">
               <span class="change-type">Deleted table</span>
             </div>
+            <div v-else-if="comment.trackedChangeDisplayType === 'paragraphInsert'">
+              <span class="change-type">Added paragraph </span>
+              <span class="tracked-change-text is-inserted">"{{ comment.trackedChangeText }}"</span>
+            </div>
+            <div v-else-if="comment.trackedChangeDisplayType === 'paragraphDelete'">
+              <span class="change-type">Deleted paragraph </span>
+              <span class="tracked-change-text is-deleted">"{{ comment.deletedText }}"</span>
+            </div>
+            <div v-else-if="comment.trackedChangeDisplayType === 'paragraphReplace'">
+              <span class="change-type">Replaced </span>
+              <span class="tracked-change-text is-deleted">"{{ comment.deletedText }}"</span>
+              <span class="change-type"> with </span>
+              <span class="tracked-change-text is-inserted">"{{ comment.trackedChangeText }}"</span>
+            </div>
             <div v-else-if="comment.trackedChangeType === 'trackFormat'">
               <span class="change-type">Format: </span>
               <span class="tracked-change-text">{{ comment.trackedChangeText }}</span>

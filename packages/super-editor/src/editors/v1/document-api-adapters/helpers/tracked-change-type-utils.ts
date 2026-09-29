@@ -1,7 +1,12 @@
 import type { TrackChangeType } from '@superdoc/document-api';
 
 export type InternalTrackChangeType = TrackChangeType | 'structural';
-export type InternalTrackChangeSubtype = 'table-insert' | 'table-delete';
+export type InternalTrackChangeSubtype =
+  | 'table-insert'
+  | 'table-delete'
+  | 'paragraph-insert'
+  | 'paragraph-delete'
+  | 'paragraph-replace';
 export type InternalStructuralChangeSide = 'insertion' | 'deletion';
 
 type StructuralDescriptor =
@@ -21,6 +26,12 @@ export function projectInternalTrackChangeType(
   structural?: StructuralDescriptor,
 ): TrackChangeType {
   if (type !== 'structural') return type;
-  if (structural?.subtype === 'table-delete' || structural?.side === 'deletion') return 'delete';
+  if (
+    structural?.subtype === 'table-delete' ||
+    structural?.subtype === 'paragraph-delete' ||
+    structural?.side === 'deletion'
+  ) {
+    return 'delete';
+  }
   return 'insert';
 }

@@ -286,6 +286,7 @@ class TrackedChangeIndexImpl implements TrackedChangeIndex {
       authorImage: toNonEmptyString(change.attrs.authorImage),
       date: toNonEmptyString(change.attrs.date),
       excerpt,
+      deletedExcerpt: change.deletedExcerpt,
       wordRevisionIds: change.wordRevisionIds ? { ...change.wordRevisionIds } : undefined,
       origin: toNonEmptyString(change.attrs.origin) as TrackedChangeSnapshot['origin'],
       imported: Boolean(toNonEmptyString(change.attrs.sourceId)),

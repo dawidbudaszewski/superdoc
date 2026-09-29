@@ -32,7 +32,10 @@ const tableRow = (trackChangeType) => ({
   attrs: trackChangeType ? { trackChange: { type: trackChangeType } } : {},
 });
 
-const paragraph = () => ({ type: { name: 'paragraph' }, attrs: {} });
+const paragraph = (trackChangeKind) => ({
+  type: { name: 'paragraph' },
+  attrs: trackChangeKind ? { trackChange: { kind: trackChangeKind } } : {},
+});
 
 describe('transactionTouchesStructuralChange', () => {
   it('returns false when the transaction did not change the doc', () => {
@@ -64,5 +67,32 @@ describe('transactionTouchesStructuralChange', () => {
       mapping: makeMapping([1]),
     };
     expect(transactionTouchesStructuralChange(transaction)).toBe(true);
+  });
+
+  it('returns true when a touched paragraph carries an insert block track change', () => {
+    const transaction = {
+      docChanged: true,
+      doc: makeDoc([paragraph('insert')]),
+      mapping: makeMapping([1]),
+    };
+    expect(transactionTouchesStructuralChange(transaction)).toBe(true);
+  });
+
+  it('returns true when a touched paragraph carries a delete block track change', () => {
+    const transaction = {
+      docChanged: true,
+      doc: makeDoc([paragraph(null), paragraph('delete')]),
+      mapping: makeMapping([1]),
+    };
+    expect(transactionTouchesStructuralChange(transaction)).toBe(true);
+  });
+
+  it('returns false for a plain paragraph with no block track change', () => {
+    const transaction = {
+      docChanged: true,
+      doc: makeDoc([paragraph(null)]),
+      mapping: makeMapping([1]),
+    };
+    expect(transactionTouchesStructuralChange(transaction)).toBe(false);
   });
 });
