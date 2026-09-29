@@ -44,6 +44,7 @@ import type {
   LayoutSourceIdentity,
   LayoutStoryLocator,
   ListBlock,
+  ParagraphAttrs,
 } from '@superdoc/contracts';
 import {
   computeLinePmRange,
@@ -65,6 +66,7 @@ import {
 import { DATASET_KEYS, decodeLayoutStoryDataset, encodeLayoutStoryDataset } from '@superdoc/dom-contract';
 import { getPresetShapeSvg } from '@superdoc/preset-geometry';
 import { DOM_CLASS_NAMES } from './constants.js';
+import { applyRtlStyles } from './features/inline-direction/index.js';
 import { createChartElement as renderChartToElement } from './features/chart/index.js';
 import { createRulerElement, ensureRulerStyles, generateRulerDefinitionFromPx } from './ruler/index.js';
 import {
@@ -3385,9 +3387,17 @@ export class DomPainter {
     block.contentBlocks.forEach((paragraphBlock, paragraphIndex) => {
       const measure = contentMeasures[paragraphIndex];
       if (!measure?.lines) return;
+      // Per-paragraph wrapper carries the resolved base direction (dir="auto"
+      // for unset) so the paragraph's lines inherit one direction instead of
+      // each line auto-detecting independently. `display:contents` keeps the
+      // wrapper transparent to the linesHost flex layout.
+      const paraWrap = this.doc!.createElement('div');
+      paraWrap.style.display = 'contents';
+      applyRtlStyles(paraWrap, paragraphBlock.attrs as ParagraphAttrs | undefined);
       measure.lines.forEach((line, lineIndex) => {
-        linesHost.appendChild(this.renderLine(paragraphBlock, line, renderContext, availableWidth, lineIndex));
+        paraWrap.appendChild(this.renderLine(paragraphBlock, line, renderContext, availableWidth, lineIndex));
       });
+      linesHost.appendChild(paraWrap);
     });
 
     contentRoot.appendChild(linesHost);
