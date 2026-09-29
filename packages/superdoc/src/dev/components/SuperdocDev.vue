@@ -9,7 +9,13 @@ import { DOCX, PDF, HTML } from '@superdoc/common';
 import { getFileObject } from '@superdoc/common';
 import BasicUpload from '@superdoc/common/components/BasicUpload.vue';
 import SuperdocLogo from './superdoc-logo.webp?url';
-import { Editor, fieldAnnotationHelpers, getStarterExtensions } from '@superdoc/super-editor';
+import {
+  Editor,
+  fieldAnnotationHelpers,
+  getStarterExtensions,
+  StructuralTrackChanges,
+  computeStructuralDiff,
+} from '@superdoc/super-editor';
 import { toolbarIcons } from '../../../../super-editor/src/editors/v1/components/toolbar/toolbarIcons';
 import BlankDOCX from '@superdoc/common/data/blank.docx?url';
 import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs';
@@ -33,6 +39,7 @@ const commentsPanel = ref(null);
 const showCommentsPanel = ref(true);
 const sidebarInstanceKey = ref(0);
 const compareInput = ref(null);
+const compareParagraphsInput = ref(null);
 
 const urlParams = new URLSearchParams(window.location.search);
 const wordBaselineServiceUrl = 'http://127.0.0.1:9185';
@@ -310,6 +317,76 @@ const handleCompareFile = async (event) => {
     const diff = editor.commands.compareDocuments(compareEditor);
     const userToApply = editor.options?.user ?? user;
     editor.commands.replayDifferences(diff, { user: userToApply, applyTrackedChanges: true });
+  } finally {
+    compareEditor?.destroy?.();
+  }
+};
+
+/**
+ * Triggers the paragraph-block compare file picker.
+ * @returns {void}
+ */
+const handleCompareParagraphsClick = () => {
+  compareParagraphsInput.value?.click?.();
+};
+
+/**
+ * Loads a comparison DOCX and applies a PARAGRAPH-LEVEL block tracked-change
+ * diff (the new structural path), as opposed to the inline char-level diff used
+ * by `handleCompareFile`. Each changed paragraph becomes a whole-paragraph
+ * delete (red) + insert (green) the reviewer can accept/reject as a unit.
+ * @param {Event} event
+ * @returns {Promise<void>}
+ */
+const handleCompareParagraphsFile = async (event) => {
+  const file = event?.target?.files?.[0];
+  if (!file) return;
+  event.target.value = '';
+
+  const editor = activeEditor.value;
+  if (!editor) return;
+
+  let compareEditor = null;
+  try {
+    const [docx, media, mediaFiles, fonts] = (await Editor.loadXmlData(file)) || [];
+    if (!docx) return;
+
+    compareEditor = new Editor({
+      isHeadless: true,
+      skipViewCreation: true,
+      extensions: getStarterExtensions(),
+      documentId: `compare-para-${Date.now()}`,
+      content: docx,
+      mode: 'docx',
+      media,
+      mediaFiles,
+      fonts,
+      annotations: true,
+    });
+
+    // Diff top-level paragraphs by content fingerprint. A changed paragraph is
+    // a remove(old) + insert(new); proposalNode is a real PM node so colors,
+    // bullets and alignment are preserved on the inserted side. `pairReplacements`
+    // links each remove+insert into one shared-operationId replace so a changed
+    // paragraph reviews as a SINGLE "Replaced X with Y" accept/reject bubble.
+    const hunks = computeStructuralDiff(editor.state.doc, compareEditor.state.doc, {
+      blockTypes: ['paragraph'],
+      pairReplacements: true,
+    });
+
+    // The proposal nodes belong to the compare editor's schema instance; rehydrate
+    // them through the active editor's schema so the insert step is schema-valid.
+    const rehydrated = hunks.map((hunk) =>
+      hunk.proposalNode ? { ...hunk, proposalNode: editor.schema.nodeFromJSON(hunk.proposalNode.toJSON()) } : hunk,
+    );
+
+    // Block tracked-change attrs only render as red/green when tracked changes
+    // (suggesting) viewing is active; enable it so the diff is visible + the
+    // accept/reject bubbles appear.
+    editor.commands.enableTrackChanges?.();
+
+    const ok = editor.commands.setStructuralDiff(rehydrated);
+    console.log(`[compare-paragraphs] hunks=${rehydrated.length} applied=${ok}`);
   } finally {
     compareEditor?.destroy?.();
   }
@@ -679,6 +756,9 @@ const init = async () => {
     toolbarGroups: ['center'],
     role: userRole,
     documentMode: 'editing',
+    // Opt-in block-level (paragraph/table) tracked-change extension. Adds the
+    // setStructuralDiff command used by the "Compare paragraphs (block)" dev tool.
+    editorExtensions: [StructuralTrackChanges],
     licenseKey: 'public_license_key_superdocinternal_ad7035140c4b',
     telemetry: {
       enabled: true,
@@ -1543,6 +1623,18 @@ if (scrollTestMode.value) {
                 type="file"
                 accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 @change="handleCompareFile"
+              />
+            </div>
+            <div class="dev-app__compare-control">
+              <button class="dev-app__header-export-btn" @click="handleCompareParagraphsClick">
+                Compare paragraphs (block)
+              </button>
+              <input
+                ref="compareParagraphsInput"
+                class="dev-app__compare-input"
+                type="file"
+                accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                @change="handleCompareParagraphsFile"
               />
             </div>
             <button class="dev-app__header-export-btn" @click="toggleShowBookmarks">

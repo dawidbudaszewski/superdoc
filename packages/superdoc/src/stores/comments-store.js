@@ -1950,6 +1950,7 @@ export const useCommentsStore = defineStore('comments', () => {
 
     syncStoryTrackedChangeComments({ superdoc, editor, broadcastChanges, snapshots: storySnapshots });
     syncStructuralTrackedChangeComments({ superdoc, editor, broadcastChanges });
+    syncBodyBlockTrackedChangeComments({ superdoc, editor, broadcastChanges, snapshots: storySnapshots });
   };
 
   /**
@@ -2039,6 +2040,94 @@ export const useCommentsStore = defineStore('comments', () => {
     }
   };
 
+  /**
+   * Surface decidable whole-PARAGRAPH structural tracked changes (the
+   * Google-Docs-style "re-suggest the entire paragraph" produced by the
+   * paragraph/block diff) as right-rail bubbles in the BODY story.
+   *
+   * Mirror of {@link syncStructuralTrackedChangeComments} for the paragraph
+   * domain. Paragraph block revisions live on `paragraph.attrs.trackChange`, so
+   * the inline `getTrackChanges` enumerator never sees them — they reach us via
+   * the tracked-change index (`enumerateStructuralBlockChanges` →
+   * `groupTrackedChanges` → index), already projected as `type: 'structural'`
+   * snapshots with a `paragraph-insert` / `paragraph-delete` subtype and a body
+   * `anchorKey` + PM range. The bubble id is the snapshot's public id so
+   * accept/reject routes `trackChanges.decide` to the same change, which the
+   * document-api executes via the v1 block-resolving accept/reject commands.
+   *
+   * Driven by the SAME index snapshots `syncTrackedChangeComments` already
+   * fetched (passed in as `snapshots`) so the bubble id/anchorKey line up
+   * exactly with the position pass.
+   */
+  const syncBodyBlockTrackedChangeComments = ({ superdoc, editor, broadcastChanges = true, snapshots = null }) => {
+    const activeDocumentId = editor?.options?.documentId != null ? String(editor.options.documentId) : null;
+    if (!activeDocumentId) return;
+
+    let resolvedSnapshots = snapshots;
+    if (!Array.isArray(resolvedSnapshots)) {
+      if (typeof getTrackedChangeIndex !== 'function') return;
+      const index = getTrackedChangeIndex(editor);
+      if (!index) return;
+      try {
+        resolvedSnapshots = index.getAll();
+      } catch {
+        return;
+      }
+    }
+
+    for (const snapshot of resolvedSnapshots) {
+      if (snapshot.storyKind !== 'body') continue;
+      if (!isParagraphBlockStructuralSnapshot(snapshot)) continue;
+
+      const publicId = snapshot.address?.entityId != null ? String(snapshot.address.entityId) : null;
+      if (!publicId) continue;
+
+      const anchorKey =
+        typeof snapshot.anchorKey === 'string' ? snapshot.anchorKey : buildBodyTrackedChangeAnchorKey(publicId);
+      const isDeletion = isStoryTrackedChangeDeletion(snapshot);
+      const isReplace = snapshot.subtype === 'paragraph-replace';
+      const trackedChangeType = getStoryTrackedChangeType(snapshot);
+      const displayType = getStoryTrackedChangeDisplayType(snapshot);
+      const excerpt = snapshot.excerpt ?? '';
+
+      const normalizedPublicId = String(publicId);
+      const normalizedAnchorKey = anchorKey != null ? String(anchorKey) : null;
+      const existingComment = commentsList.value.find((comment) => {
+        if (!comment?.trackedChange) return false;
+        if (!belongsToTrackedChangeSyncDocument(comment, activeDocumentId)) return false;
+        const commentAnchorKey = comment.trackedChangeAnchorKey != null ? String(comment.trackedChangeAnchorKey) : null;
+        if (normalizedAnchorKey && commentAnchorKey) return commentAnchorKey === normalizedAnchorKey;
+        const commentId = comment.commentId != null ? String(comment.commentId) : null;
+        const importedId = comment.importedId != null ? String(comment.importedId) : null;
+        return commentId === normalizedPublicId || importedId === normalizedPublicId;
+      });
+
+      const params = {
+        event: existingComment ? 'update' : 'add',
+        changeId: publicId,
+        // Replace carries BOTH halves: new text in `trackedChangeText`, old text
+        // in `deletedText`, so the bubble reads "Replaced OLD with NEW".
+        trackedChangeText: isDeletion ? '' : excerpt,
+        trackedChangeType,
+        trackedChangeDisplayType: displayType,
+        deletedText: isReplace ? (snapshot.deletedExcerpt ?? '') : isDeletion ? excerpt : null,
+        authorId: null,
+        authorEmail: snapshot.authorEmail || null,
+        authorImage: snapshot.authorImage || null,
+        date: snapshot.date || null,
+        author: snapshot.author || null,
+        documentId: activeDocumentId,
+        coords: null,
+        trackedChangeStory: BODY_TRACKED_CHANGE_STORY,
+        trackedChangeStoryKind: 'body',
+        trackedChangeStoryLabel: '',
+        trackedChangeAnchorKey: anchorKey,
+      };
+
+      handleTrackedChangeUpdate({ superdoc, params, broadcastChanges });
+    }
+  };
+
   const syncStoryTrackedChangeComments = ({ superdoc, editor, broadcastChanges = true, snapshots = null }) => {
     const activeDocumentId = editor?.options?.documentId != null ? String(editor.options.documentId) : null;
     if (!activeDocumentId) return;
@@ -2063,19 +2152,40 @@ export const useCommentsStore = defineStore('comments', () => {
 
   const getStoryTrackedChangeDisplayType = (snapshot) => {
     if (snapshot?.type !== 'structural') return snapshot?.type ?? null;
-    return snapshot?.subtype === 'table-delete' ? 'tableDelete' : 'tableInsert';
+    switch (snapshot?.subtype) {
+      case 'table-delete':
+        return 'tableDelete';
+      case 'paragraph-insert':
+        return 'paragraphInsert';
+      case 'paragraph-delete':
+        return 'paragraphDelete';
+      case 'paragraph-replace':
+        return 'paragraphReplace';
+      default:
+        return 'tableInsert';
+    }
   };
 
   const getStoryTrackedChangeType = (snapshot) => {
     if (snapshot?.type !== 'structural') return snapshot?.type ?? null;
-    return snapshot?.subtype === 'table-delete' ? 'trackDelete' : 'trackInsert';
+    return snapshot?.subtype === 'table-delete' || snapshot?.subtype === 'paragraph-delete'
+      ? 'trackDelete'
+      : 'trackInsert';
   };
 
   const isStoryTrackedChangeDeletion = (snapshot) => {
     if (!snapshot) return false;
     if (snapshot.type === 'delete') return true;
-    return snapshot.type === 'structural' && snapshot.subtype === 'table-delete';
+    return (
+      snapshot.type === 'structural' && (snapshot.subtype === 'table-delete' || snapshot.subtype === 'paragraph-delete')
+    );
   };
+
+  const isParagraphBlockStructuralSnapshot = (snapshot) =>
+    snapshot?.type === 'structural' &&
+    (snapshot?.subtype === 'paragraph-insert' ||
+      snapshot?.subtype === 'paragraph-delete' ||
+      snapshot?.subtype === 'paragraph-replace');
 
   const buildStoryTrackedChangeParams = ({ editor, snapshot, documentId, event }) => {
     const trackedChangeType = getStoryTrackedChangeType(snapshot);

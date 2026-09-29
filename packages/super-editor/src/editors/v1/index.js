@@ -45,6 +45,7 @@ import { CommentsPluginKey, createOrUpdateTrackedChangeComment } from './extensi
 import { AnnotatorHelpers } from '@helpers/annotator.js';
 import { SectionHelpers } from '@extensions/structured-content/document-section/index.js';
 import { registeredHandlers } from './core/super-converter/v3/handlers/index.js';
+import { StructuralTrackChanges, computeStructuralDiff } from './extensions/structural-track-changes/index.js';
 import { Decoration, DecorationSet } from 'prosemirror-view';
 import { seedEditorStateToYDoc } from './extensions/collaboration/seed-editor-to-ydoc.js';
 import { onCollaborationProviderSynced } from './core/helpers/collaboration-provider-sync.js';
@@ -125,6 +126,8 @@ export {
   getStarterExtensions,
   /** @internal */
   getRichTextExtensions,
+  StructuralTrackChanges,
+  computeStructuralDiff,
   createZip,
   /** @internal */
   getAllowedImageDimensions,

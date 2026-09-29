@@ -14,6 +14,8 @@ import {
   sliceFromText,
 } from './review-model/edit-intent.js';
 import { decideTrackedChanges, buildDecisionBubbleEvents } from './review-model/decision-engine.js';
+import { getBlockTrackedChanges } from './trackChangesHelpers/getBlockTrackedChanges.js';
+import { applyBlockTrackedChangeResolution } from './trackChangesHelpers/acceptRejectBlockTrackedChange.js';
 
 /**
  * @typedef {{ code: string, message: string, details?: unknown }} TrackChangesFailure
@@ -44,10 +46,16 @@ const readReplacementsMode = (editor) =>
   editor?.options?.trackedChanges?.replacements === 'independent' ? 'independent' : 'paired';
 
 /**
+ * A permission denial from the decision engine must fail closed: the
+ * block-level fallbacks below must not resolve changes the user may not decide.
+ */
+const isPermissionDenied = (reviewDecision) => reviewDecision.failure?.code === 'PERMISSION_DENIED';
+
+/**
  * Runs the atomic decision engine, dispatches the resulting transaction, and
  * emits bubble lifecycle events from the decision receipt.
  */
-const dispatchReviewDecision = ({ editor, state, dispatch, decision, target }) => {
+const dispatchReviewDecision = ({ editor, state, dispatch, decision, target, appendToTr }) => {
   const trackChangesStorage = getTrackChangesStorage(editor);
   if (trackChangesStorage) {
     trackChangesStorage.lastDecisionFailure = null;
@@ -77,6 +85,20 @@ const dispatchReviewDecision = ({ editor, state, dispatch, decision, target }) =
     trackChangesStorage.lastDecisionReceipt = result.receipt ?? null;
   }
   if (dispatch) {
+    // Let the caller append extra steps (e.g. block-level paragraph/row
+    // tracked-change resolution) onto the SAME transaction so inline and block
+    // changes are resolved atomically in a single dispatch. Block resolution
+    // maps its positions through tr.mapping, so it stays correct after the
+    // inline steps already in result.tr. Without this, resolving blocks in a
+    // second transaction races the inline dispatch and one of them is dropped
+    // as a mismatched transaction (the "accept-all needs two clicks" bug).
+    if (typeof appendToTr === 'function') {
+      try {
+        appendToTr(result.tr, state);
+      } catch {
+        // non-fatal: fall back to inline-only resolution
+      }
+    }
     // Compute the post-dispatch state locally so we can derive update events
     // for partial decisions (where a change has remaining tracked text on the
     // doc). Then dispatch the real transaction.
@@ -333,7 +355,7 @@ export const TrackChanges = Extension.create({
 
       acceptTrackedChangeById:
         (id, options = {}) =>
-        ({ state, dispatch, editor }) => {
+        ({ state, dispatch, editor, commands }) => {
           const reviewDecision = dispatchReviewDecision({
             editor,
             state,
@@ -341,25 +363,79 @@ export const TrackChanges = Extension.create({
             decision: 'accept',
             target: { kind: 'id', id, ...(options.side ? { side: options.side } : {}) },
           });
-          return reviewDecision.applied;
+          if (reviewDecision.applied) return true;
+          if (isPermissionDenied(reviewDecision)) return false;
+
+          // Block-level fallback: the review-model decision engine only handles
+          // inline (mark-based) tracked changes; a paragraph/row structural
+          // change carries its tracked-change id on the node's `trackChange`
+          // attr, not on an inline mark, so dispatchReviewDecision returns
+          // applied:false for it. Resolve it via the block-attr path.
+          const blockEntries = getBlockTrackedChanges(state);
+          const byBlockId = blockEntries.find((e) => e.id === id);
+          if (byBlockId) {
+            const blockTr = state.tr;
+            blockTr.setMeta('inputType', 'acceptReject');
+            const { applied } = applyBlockTrackedChangeResolution({
+              tr: blockTr,
+              state,
+              ids: [id],
+              decision: 'accept',
+            });
+            if (applied === 0) return false;
+            if (dispatch) dispatch(blockTr);
+            return true;
+          }
+          const byOperation = blockEntries.filter((e) => e.operationId === id);
+          if (byOperation.length > 0 && commands.acceptTrackedChangeOperation) {
+            return commands.acceptTrackedChangeOperation(id);
+          }
+          return false;
         },
 
       acceptAllTrackedChanges:
         () =>
         ({ state, dispatch, editor }) => {
+          // Block-level (paragraph/row) tracked changes live on node attrs, not
+          // inline marks, so they're resolved by applyBlockTrackedChangeResolution
+          // rather than the inline decision engine. We resolve BOTH kinds in one
+          // atomic transaction so accept-all takes a single click regardless of
+          // the inline/block mix.
+          const blockIds = getBlockTrackedChanges(state).map((e) => e.id);
           const reviewDecision = dispatchReviewDecision({
             editor,
             state,
             dispatch,
             decision: 'accept',
             target: { kind: 'all' },
+            // Appended onto the inline transaction (atomic). Only runs when the
+            // inline decision actually dispatched (i.e. inline changes existed).
+            appendToTr: blockIds.length
+              ? (tr, s) => applyBlockTrackedChangeResolution({ tr, state: s, ids: blockIds, decision: 'accept' })
+              : undefined,
           });
-          return reviewDecision.applied;
+          // No inline changes (decision was a no-op, so nothing dispatched and
+          // the appendToTr hook never ran) but block changes remain: resolve
+          // them in their own transaction from the (still-current) state.
+          const resolveBlocksAlone =
+            !reviewDecision.applied && blockIds.length > 0 && !isPermissionDenied(reviewDecision);
+          if (dispatch && resolveBlocksAlone) {
+            const blockTr = state.tr;
+            blockTr.setMeta('inputType', 'acceptReject');
+            const { applied } = applyBlockTrackedChangeResolution({
+              tr: blockTr,
+              state,
+              ids: blockIds,
+              decision: 'accept',
+            });
+            if (applied > 0) dispatch(blockTr);
+          }
+          return reviewDecision.applied || resolveBlocksAlone;
         },
 
       rejectTrackedChangeById:
         (id, options = {}) =>
-        ({ state, dispatch, editor }) => {
+        ({ state, dispatch, editor, commands }) => {
           const reviewDecision = dispatchReviewDecision({
             editor,
             state,
@@ -367,7 +443,30 @@ export const TrackChanges = Extension.create({
             decision: 'reject',
             target: { kind: 'id', id, ...(options.side ? { side: options.side } : {}) },
           });
-          return reviewDecision.applied;
+          if (reviewDecision.applied) return true;
+          if (isPermissionDenied(reviewDecision)) return false;
+
+          // Block-level fallback (see acceptTrackedChangeById for rationale).
+          const blockEntries = getBlockTrackedChanges(state);
+          const byBlockId = blockEntries.find((e) => e.id === id);
+          if (byBlockId) {
+            const blockTr = state.tr;
+            blockTr.setMeta('inputType', 'acceptReject');
+            const { applied } = applyBlockTrackedChangeResolution({
+              tr: blockTr,
+              state,
+              ids: [id],
+              decision: 'reject',
+            });
+            if (applied === 0) return false;
+            if (dispatch) dispatch(blockTr);
+            return true;
+          }
+          const byOperation = blockEntries.filter((e) => e.operationId === id);
+          if (byOperation.length > 0 && commands.rejectTrackedChangeOperation) {
+            return commands.rejectTrackedChangeOperation(id);
+          }
+          return false;
         },
 
       rejectTrackedChange:
@@ -421,14 +520,34 @@ export const TrackChanges = Extension.create({
       rejectAllTrackedChanges:
         () =>
         ({ state, dispatch, editor }) => {
+          // Mirror acceptAllTrackedChanges: resolve inline + block changes in a
+          // single atomic transaction (one click), with a fallback for the
+          // block-only case.
+          const blockIds = getBlockTrackedChanges(state).map((e) => e.id);
           const reviewDecision = dispatchReviewDecision({
             editor,
             state,
             dispatch,
             decision: 'reject',
             target: { kind: 'all' },
+            appendToTr: blockIds.length
+              ? (tr, s) => applyBlockTrackedChangeResolution({ tr, state: s, ids: blockIds, decision: 'reject' })
+              : undefined,
           });
-          return reviewDecision.applied;
+          const resolveBlocksAlone =
+            !reviewDecision.applied && blockIds.length > 0 && !isPermissionDenied(reviewDecision);
+          if (dispatch && resolveBlocksAlone) {
+            const blockTr = state.tr;
+            blockTr.setMeta('inputType', 'acceptReject');
+            const { applied } = applyBlockTrackedChangeResolution({
+              tr: blockTr,
+              state,
+              ids: blockIds,
+              decision: 'reject',
+            });
+            if (applied > 0) dispatch(blockTr);
+          }
+          return reviewDecision.applied || resolveBlocksAlone;
         },
 
       insertTrackedChange:
@@ -758,7 +877,25 @@ const dispatchCompiledInsertTrackedChange = ({
   if (trackChangesStorage) {
     trackChangesStorage.lastCompilerFailure = null;
   }
-  const activeMarks = state.storedMarks ?? state.doc.resolve(from).marks();
+  let activeMarks = state.storedMarks ?? state.doc.resolve(from).marks();
+  // For a tracked replace, `from` is the paragraph content boundary, which often
+  // resolves to an empty leading "paragraph mark" run whose textStyle is a null
+  // reset (fontSize:null, color:null, ...). Using those marks makes the
+  // replacement text render at the editor default instead of the paragraph's real
+  // run styling. Prefer the marks of the first non-empty text node in the
+  // replaced range. (Only when the caller hasn't explicitly set storedMarks.)
+  if (!state.storedMarks && from !== to) {
+    let rangeMarks = null;
+    state.doc.nodesBetween(from, to, (node) => {
+      if (rangeMarks) return false;
+      if (node.isText && node.text && node.text.trim().length > 0) {
+        rangeMarks = node.marks;
+        return false;
+      }
+      return true;
+    });
+    if (rangeMarks) activeMarks = rangeMarks;
+  }
   let intent;
   try {
     if (from === to && text) {

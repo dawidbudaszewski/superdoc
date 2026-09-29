@@ -33,8 +33,12 @@ export interface TrackedChangeSnapshot {
   authorImage?: string;
   /** Change creation timestamp, if captured. */
   date?: string;
-  /** Short textual excerpt for sidebar display. */
+  /** Short textual excerpt for sidebar display. For a structural replace this
+   * is the inserted (new) text. */
   excerpt?: string;
+  /** The deleted (old) text of a structural replace, paired with `excerpt`
+   * (the new text) so a "Replaced X with Y" bubble can show both halves. */
+  deletedExcerpt?: string;
   /** Raw imported Word revision IDs, if present. */
   wordRevisionIds?: TrackChangeWordRevisionIds;
   /** Source application or package family detected on import. */

@@ -1,17 +1,23 @@
 /**
- * Detect whether a ProseMirror transaction touches a structural row tracked
- * change (whole-table insert/delete encoded on `tableRow.attrs.trackChange`).
+ * Detect whether a ProseMirror transaction touches a structural tracked change
+ * that lives on node attributes rather than inline marks:
+ *   - whole-table insert/delete encoded on `tableRow.attrs.trackChange`
+ *     (`{ type: 'rowInsert' | 'rowDelete' }`), and
+ *   - whole-paragraph insert/delete encoded on `paragraph.attrs.trackChange`
+ *     (`{ kind: 'insert' | 'delete' }`) — the Google-Docs-style paragraph
+ *     re-suggest produced by the block diff.
  *
- * Structural row revisions live on node attributes — NOT on inline marks — so
- * the inline `collectTouchedTrackedChangeIds` scan never reports them. When such
- * a node-attr change is part of a transaction, the right-rail structural bubble
- * sync must run a FULL resync (the targeted, id-based resync path only refreshes
- * inline mark bubbles). This helper flags those transactions so the caller can
- * force a full resync, mirroring how inline mark edits trigger sidebar refresh.
+ * These node-attr revisions are NOT seen by the inline
+ * `collectTouchedTrackedChangeIds` scan, so when one is part of a transaction
+ * the right-rail bubble sync must run a FULL resync (the targeted, id-based
+ * resync path only refreshes inline mark bubbles). This helper flags those
+ * transactions so the caller can force a full resync, mirroring how inline mark
+ * edits trigger sidebar refresh.
  *
  * Conservative by design: returns true if any node within a changed range is a
- * `tableRow` carrying a `rowInsert`/`rowDelete` `trackChange`. False positives
- * only cost an extra full resync; false negatives would silently drop the bubble.
+ * `tableRow` carrying a `rowInsert`/`rowDelete` `trackChange` OR a `paragraph`
+ * carrying an `insert`/`delete` `trackChange`. False positives only cost an
+ * extra full resync; false negatives would silently drop the bubble.
  *
  * @param {import('prosemirror-state').Transaction} transaction
  * @returns {boolean}
@@ -35,9 +41,12 @@ export function transactionTouchesStructuralChange(transaction) {
 
       transaction.doc.nodesBetween(from, to, (node) => {
         if (touched) return false;
-        if (node?.type?.name !== 'tableRow') return undefined;
-        const tc = node.attrs?.trackChange;
-        if (tc && (tc.type === 'rowInsert' || tc.type === 'rowDelete')) {
+        const tc = node?.attrs?.trackChange;
+        if (!tc) return undefined;
+        const nodeName = node.type?.name;
+        const isRowStructural = nodeName === 'tableRow' && (tc.type === 'rowInsert' || tc.type === 'rowDelete');
+        const isParagraphStructural = nodeName === 'paragraph' && (tc.kind === 'insert' || tc.kind === 'delete');
+        if (isRowStructural || isParagraphStructural) {
           touched = true;
           return false;
         }

@@ -1170,6 +1170,62 @@ describe('Table commands', async () => {
     });
   });
 
+  describe('column add/delete clears stale grid (export keeps the new column)', () => {
+    const buildGriddedTable = (columns) => {
+      const cellWithText = (text) =>
+        schema.nodes.tableCell.create({ colwidth: [100] }, schema.nodes.paragraph.create(null, schema.text(text)));
+      const grid = Array.from({ length: columns }, () => ({ col: 1500 }));
+      const makeRow = (texts) => schema.nodes.tableRow.create(null, texts.map(cellWithText));
+      const tableNode = schema.nodes.table.create({ grid, userEdited: false }, [
+        makeRow(Array.from({ length: columns }, (_, i) => `H${i}`)),
+        makeRow(Array.from({ length: columns }, (_, i) => `B${i}`)),
+      ]);
+      return schema.nodes.doc.create(null, [tableNode]);
+    };
+
+    const selectFirstCell = () => {
+      let paraPos = null;
+      editor.state.doc.descendants((node, pos) => {
+        if (paraPos == null && node.type.name === 'paragraph') {
+          paraPos = pos + 1;
+          return false;
+        }
+        return true;
+      });
+      editor.view.dispatch(editor.state.tr.setSelection(TextSelection.create(editor.state.doc, paraPos)));
+    };
+
+    it('addColumnAfter increases the column count AND nulls the stale grid', async () => {
+      ({ editor } = initTestEditor({ ...cachedBlankDoc }));
+      ({ schema } = editor);
+      editor.setState(EditorState.create({ schema, doc: buildGriddedTable(2), plugins: editor.state.plugins }));
+
+      const before = editor.state.doc.nodeAt(findTablePos(editor.state.doc));
+      expect(before.attrs.grid).toHaveLength(2);
+      expect(TableMap.get(before).width).toBe(2);
+
+      selectFirstCell();
+      expect(editor.commands.addColumnAfter()).toBe(true);
+
+      const after = editor.state.doc.nodeAt(findTablePos(editor.state.doc));
+      expect(TableMap.get(after).width).toBe(3); // the new column survives
+      expect(after.attrs.grid).toBeNull(); // stale 2-col grid dropped
+    });
+
+    it('deleteColumn decreases the column count AND nulls the stale grid', async () => {
+      ({ editor } = initTestEditor({ ...cachedBlankDoc }));
+      ({ schema } = editor);
+      editor.setState(EditorState.create({ schema, doc: buildGriddedTable(3), plugins: editor.state.plugins }));
+
+      selectFirstCell();
+      expect(editor.commands.deleteColumn()).toBe(true);
+
+      const after = editor.state.doc.nodeAt(findTablePos(editor.state.doc));
+      expect(TableMap.get(after).width).toBe(2);
+      expect(after.attrs.grid).toBeNull();
+    });
+  });
+
   describe('insertTableAt trailing separator paragraph', () => {
     it('inserts table followed by a trailing paragraph', async () => {
       const { docx, media, mediaFiles, fonts } = cachedBlankDoc;

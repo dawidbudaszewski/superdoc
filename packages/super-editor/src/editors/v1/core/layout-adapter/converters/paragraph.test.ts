@@ -88,7 +88,9 @@ vi.mock('../marks/index.js', () => ({
 vi.mock('../tracked-changes.js', () => ({
   shouldHideTrackedNode: vi.fn(),
   annotateBlockWithTrackedChange: vi.fn(),
+  applyBlockTrackedChangeToRuns: vi.fn(),
   applyTrackedChangesModeToRuns: vi.fn(),
+  buildBlockTrackedChangeMetaFromAttr: vi.fn(),
 }));
 
 vi.mock('../attributes/paragraph-styles.js', () => ({

@@ -182,6 +182,33 @@ const createNormalizedSlice = ({ step, normalizedText, doc }) => {
 };
 
 /**
+ * Detects whether a ReplaceStep's slice already carries block-level
+ * `trackChange` metadata via PM node attributes (e.g. a paragraph stamped with
+ * `trackChange.insert` by applyHunks). When true, the slice should be applied
+ * as-is — wrapping its inline content with `trackInsert` marks would
+ * double-track.
+ *
+ * @param {import('prosemirror-model').Slice} slice
+ * @returns {boolean}
+ */
+const sliceContainsPreMarkedBlockTrackedChange = (slice) => {
+  if (!slice || !slice.content || slice.content.size === 0) return false;
+  let found = false;
+  slice.content.descendants((node) => {
+    if (found) return false;
+    // Accept both the paragraph `{ kind }` shape and the OOXML-aligned
+    // `{ type: 'rowInsert' | 'rowDelete' }` shape that applyHunks writes.
+    const tc = node?.attrs?.trackChange;
+    if (tc && (tc.kind || tc.type === 'rowInsert' || tc.type === 'rowDelete')) {
+      found = true;
+      return false;
+    }
+    return undefined;
+  });
+  return found;
+};
+
+/**
  * True for transactions produced by IME composition input. Exported so the
  * editor dispatch path can defer tracked-transaction rewriting while a
  * composition is in flight (SD-2368): rewriting preedit updates into tracked
@@ -432,6 +459,18 @@ export const trackedTransaction = ({ tr, state, user, replacements = 'paired' })
     }
 
     step = normalizeCompositionInsertStep({ step, doc, tr, user, pendingDeadKeyPlaceholder });
+
+    // Block-level tracked-change replay path: the inserted slice already
+    // carries node-level tracked metadata via PM node attrs (see applyHunks).
+    // Wrapping the inner content with inline trackInsert marks would
+    // double-track. Apply such steps as-is — but still append to `map` so
+    // subsequent steps in the same transaction map through this step's changes
+    // (matches the pass-through pattern in replaceStep.js).
+    if (step instanceof ReplaceStep && sliceContainsPreMarkedBlockTrackedChange(step.slice)) {
+      newTr.step(step);
+      map.appendMap(step.getMap());
+      return;
+    }
 
     if (step instanceof ReplaceStep) {
       replaceStep({
